@@ -1,12 +1,13 @@
 import json
 import re
 import sys
+import logging
 from pathlib import Path
 
 from pypdf import PdfReader
 from tkinterdnd2 import TkinterDnD, DND_FILES
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 
 
@@ -20,14 +21,29 @@ def app_dir() -> Path:
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
 
+
 BASE_DIR = app_dir()
 
 # 기본 Input/Output (프로그램 폴더 기준)
-DEFAULT_INPUT_DIR  = BASE_DIR / "Input"
+DEFAULT_INPUT_DIR = BASE_DIR / "Input"
 DEFAULT_OUTPUT_DIR = BASE_DIR / "Output"
 
 # 설정 파일(출력폴더 기억)
 CONFIG_PATH = BASE_DIR / "config.json"
+
+# =========================
+# 로그 파일 설정 (exe/py 공통)
+# =========================
+LOG_PATH = BASE_DIR / "suncheck_renamer.log"
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_PATH, encoding="utf-8"),
+        logging.StreamHandler(),  # 터미널 실행 시에도 보이도록
+    ],
+)
+logger = logging.getLogger("suncheck_renamer")
 
 
 # =========================
@@ -38,10 +54,8 @@ def draw_pdf_icon(c: tk.Canvas, x: int, y: int, scale=1.0, color="#b8c2dc"):
     left, top = x - w // 2, y - h // 2
     right, bottom = left + w, top + h
 
-    # 문서 본체
     c.create_rectangle(left, top, right, bottom, outline=color, width=2, fill="#f7f9ff")
 
-    # 접힌 모서리
     fold = int(18 * scale)
     c.create_polygon(
         right - fold, top,
@@ -50,19 +64,25 @@ def draw_pdf_icon(c: tk.Canvas, x: int, y: int, scale=1.0, color="#b8c2dc"):
         fill="#e6ebf7", outline=color, width=2
     )
 
-    # 문서 라인
     for i in range(3):
         yy = top + int((28 + i * 12) * scale)
-        c.create_line(left + int(12 * scale), yy, right - int(12 * scale), yy,
-                      fill="#dfe6f6", width=2)
+        c.create_line(
+            left + int(12 * scale), yy,
+            right - int(12 * scale), yy,
+            fill="#dfe6f6", width=2
+        )
 
-    # PDF 라벨
-    c.create_rectangle(left + int(10 * scale), bottom - int(28 * scale),
-                       right - int(10 * scale), bottom - int(10 * scale),
-                       fill="#e1e7f6", outline="")
-    c.create_text(x, bottom - int(19 * scale), text="PDF",
-                  font=("Helvetica", int(14 * scale), "bold"),
-                  fill="#7a86a8")
+    c.create_rectangle(
+        left + int(10 * scale), bottom - int(28 * scale),
+        right - int(10 * scale), bottom - int(10 * scale),
+        fill="#e1e7f6", outline=""
+    )
+    c.create_text(
+        x, bottom - int(19 * scale),
+        text="PDF",
+        font=("Helvetica", int(14 * scale), "bold"),
+        fill="#7a86a8"
+    )
 
 
 def draw_folder_pdf_icon(c: tk.Canvas, x: int, y: int, scale=1.0, color="#b8c2dc"):
@@ -70,15 +90,14 @@ def draw_folder_pdf_icon(c: tk.Canvas, x: int, y: int, scale=1.0, color="#b8c2dc
     left, top = x - fw // 2, y - fh // 2
     right, bottom = left + fw, top + fh
 
-    # 폴더 탭
-    c.create_rectangle(left + int(10 * scale), top - int(18 * scale),
-                       left + int(54 * scale), top,
-                       outline=color, width=2, fill="#f7f9ff")
+    c.create_rectangle(
+        left + int(10 * scale), top - int(18 * scale),
+        left + int(54 * scale), top,
+        outline=color, width=2, fill="#f7f9ff"
+    )
 
-    # 폴더 몸체
     c.create_rectangle(left, top, right, bottom, outline=color, width=2, fill="#f7f9ff")
 
-    # 안쪽 작은 PDF
     draw_pdf_icon(c, x, y + int(8 * scale), scale=0.55 * scale, color=color)
 
 
@@ -93,14 +112,12 @@ def load_config():
                 return cfg
         except Exception:
             pass
-    # 최초 실행 시 Output 기본값
     return {"output_dir": str(DEFAULT_OUTPUT_DIR)}
 
+
 def save_config(cfg: dict):
-    CONFIG_PATH.write_text(
-        json.dumps(cfg, ensure_ascii=False, indent=2),
-        encoding="utf-8"
-    )
+    CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
 
 CFG = load_config()
 
@@ -108,21 +125,20 @@ CFG = load_config()
 # =========================
 # PDF 텍스트 추출 / 파싱
 # =========================
-PID_RE   = re.compile(r"Patient ID:\s*([A-Za-z]*\d{5,9})")
-NAME_RE  = re.compile(r"Patient Name:\s*([^\n\r]+)")
-PLAN_RE  = re.compile(r"Plan Name:\s*([^\n\r]+)")
-GAMMA_RE = re.compile(
-    r"Diff\s*\(%\)\s*:\s*(\d+)\s*Dist\s*\(mm\)\s*:\s*(\d+)",
-    re.IGNORECASE
-)
+PID_RE = re.compile(r"Patient ID:\s*([A-Za-z]*\d{5,9})")
+NAME_RE = re.compile(r"Patient Name:\s*([^\n\r]+)")
+PLAN_RE = re.compile(r"Plan Name:\s*([^\n\r]+)")
+GAMMA_RE = re.compile(r"Diff\s*\(%\)\s*:\s*(\d+)\s*Dist\s*\(mm\)\s*:\s*(\d+)", re.IGNORECASE)
+
 
 def extract_text(pdf: Path) -> str:
     reader = PdfReader(str(pdf))
     return "\n".join((p.extract_text() or "") for p in reader.pages)
 
+
 def clean(s: str) -> str:
-    # 파일명 금지 문자만 제거 (쉼표/공백은 유지)
     return re.sub(r'[\\/:*?"<>|]', "", s.strip())
+
 
 def make_unique(path: Path) -> Path:
     if not path.exists():
@@ -134,12 +150,13 @@ def make_unique(path: Path) -> Path:
             return candidate
     return path
 
+
 def process_pdf(pdf: Path, output_dir: Path) -> Path:
     text = extract_text(pdf)
 
-    pid_m   = PID_RE.search(text)
-    name_m  = NAME_RE.search(text)
-    plan_m  = PLAN_RE.search(text)
+    pid_m = PID_RE.search(text)
+    name_m = NAME_RE.search(text)
+    plan_m = PLAN_RE.search(text)
     gamma_m = GAMMA_RE.search(text)
 
     if not pid_m:
@@ -151,7 +168,7 @@ def process_pdf(pdf: Path, output_dir: Path) -> Path:
     if not gamma_m:
         raise ValueError("Diff(%)/Dist(mm)를 찾지 못함")
 
-    pid  = pid_m.group(1)
+    pid = pid_m.group(1)
     name = name_m.group(1)
     plan = plan_m.group(1)
 
@@ -163,7 +180,6 @@ def process_pdf(pdf: Path, output_dir: Path) -> Path:
 
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = make_unique(output_dir / new_name)
-
     out_path.write_bytes(pdf.read_bytes())
     return out_path
 
@@ -213,7 +229,6 @@ class App(TkinterDnD.Tk):
         self.drop_canvas = tk.Canvas(self, height=240, highlightthickness=0, bg="#f3f6fb")
         self.drop_canvas.pack(fill="x", padx=10, pady=10)
 
-        # 가운데 아이콘 + 텍스트
         draw_pdf_icon(self.drop_canvas, 460 - 90, 100, scale=1.0)
         draw_folder_pdf_icon(self.drop_canvas, 460 + 90, 100, scale=1.0)
 
@@ -237,9 +252,19 @@ class App(TkinterDnD.Tk):
         self.log = ScrolledText(self, height=8)
         self.log.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
-        self.log_line(f"[INFO] App folder : {BASE_DIR}")
+        # 시작 로그
+        self.log_line(f"[INFO] App folder   : {BASE_DIR}")
         self.log_line(f"[INFO] Input folder : {DEFAULT_INPUT_DIR}")
         self.log_line(f"[INFO] Output folder: {self.output_dir}")
+        self.log_line(f"[INFO] Log file     : {LOG_PATH}")
+
+        logger.info("===== SunCHECK PDF Renamer started =====")
+        logger.info(f"sys.version   : {sys.version}")
+        logger.info(f"sys.executable: {sys.executable}")
+        logger.info(f"BASE_DIR      : {BASE_DIR}")
+        logger.info(f"INPUT_DIR     : {DEFAULT_INPUT_DIR}")
+        logger.info(f"OUTPUT_DIR    : {self.output_dir}")
+        logger.info(f"LOG_PATH      : {LOG_PATH}")
 
     def output_dir_str(self):
         return str(self.output_dir) if self.output_dir else "(click to set)"
@@ -247,6 +272,11 @@ class App(TkinterDnD.Tk):
     def log_line(self, msg: str):
         self.log.insert("end", msg + "\n")
         self.log.see("end")
+        # 파일에도 같이 남김
+        if msg.startswith("[ERR]"):
+            logger.error(msg)
+        else:
+            logger.info(msg)
 
     def choose_output(self):
         d = filedialog.askdirectory(title="Output 폴더 선택")
@@ -262,20 +292,28 @@ class App(TkinterDnD.Tk):
         self.log_line(f"[SET] Output 폴더: {self.output_dir}")
 
     def on_drop(self, event):
-        if self.output_dir is None:
-            self.log_line("[ERR] Output 폴더가 지정되지 않았습니다.")
-            return
+        try:
+            if self.output_dir is None:
+                self.log_line("[ERR] Output 폴더가 지정되지 않았습니다.")
+                return
 
-        for item in self.tk.splitlist(event.data):
-            path = Path(item)
+            items = self.tk.splitlist(event.data)
+            self.log_line(f"[INFO] Drop items: {len(items)}")
 
-            if path.is_dir():
-                pdfs = sorted(path.glob("*.pdf"))
-                self.log_line(f"[DIR] {path} ({len(pdfs)} PDFs)")
-                for pdf in pdfs:
-                    self.handle_pdf(pdf)
-            else:
-                self.handle_pdf(path)
+            for item in items:
+                path = Path(item)
+
+                if path.is_dir():
+                    pdfs = sorted(path.glob("*.pdf"))
+                    self.log_line(f"[DIR] {path} ({len(pdfs)} PDFs)")
+                    for pdf in pdfs:
+                        self.handle_pdf(pdf)
+                else:
+                    self.handle_pdf(path)
+
+        except Exception as e:
+            self.log_line(f"[ERR] Drop 처리 중 예외: {e}")
+            logger.exception("Drop 처리 중 예외(Traceback 포함)")
 
     def handle_pdf(self, pdf: Path):
         if pdf.suffix.lower() != ".pdf":
@@ -286,7 +324,12 @@ class App(TkinterDnD.Tk):
             self.log_line(f"[OK] {pdf.name} → {out.name}")
         except Exception as e:
             self.log_line(f"[ERR] {pdf.name}: {e}")
+            logger.exception(f"PDF 처리 실패: {pdf}")
 
 
 if __name__ == "__main__":
-    App().mainloop()
+    try:
+        App().mainloop()
+    except Exception:
+        logger.exception("프로그램 전체 크래시 (최상위 예외)")
+        raise
